@@ -13,8 +13,8 @@ use crate::{
     RawSyntaxKind,
 };
 
-pub(super) type GreenElement = NodeOrToken<GreenNode, GreenToken>;
-pub(crate) type GreenElementRef<'a> = NodeOrToken<&'a GreenNode, &'a GreenToken>;
+pub type GreenElement = NodeOrToken<GreenNode, GreenToken>;
+pub type GreenElementRef<'a> = NodeOrToken<&'a GreenNode, &'a GreenToken>;
 
 #[repr(transparent)]
 pub(crate) struct PackedGreenElement {

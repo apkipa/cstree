@@ -88,13 +88,13 @@ enum Event<'text> {
 
 /// Make a `SyntaxNode` serializable but without serializing the data.
 pub(crate) struct SerializeWithResolver<'node, 'resolver, S: Syntax, D: 'static, R: ?Sized> {
-    pub(crate) node:     &'node SyntaxNode<S, D>,
+    pub(crate) node: &'node SyntaxNode<S, D>,
     pub(crate) resolver: &'resolver R,
 }
 
 /// Make a `SyntaxNode` serializable which will include the data for serialization.
 pub(crate) struct SerializeWithData<'node, 'resolver, S: Syntax, D: 'static, R: ?Sized> {
-    pub(crate) node:     &'node SyntaxNode<S, D>,
+    pub(crate) node: &'node SyntaxNode<S, D>,
     pub(crate) resolver: &'resolver R,
 }
 
@@ -136,7 +136,7 @@ where
         Ser: serde::Serializer,
     {
         let node = SerializeWithResolver {
-            node:     self,
+            node: self,
             resolver: self.resolver().as_ref(),
         };
         node.serialize(serializer)

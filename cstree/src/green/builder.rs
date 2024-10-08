@@ -23,8 +23,8 @@ const CHILDREN_CACHE_THRESHOLD: usize = 3;
 /// You can re-use the same cache for multiple similar trees with [`GreenNodeBuilder::with_cache`].
 #[derive(Debug)]
 pub struct NodeCache<'i, I = TokenInterner> {
-    nodes:    FxHashMap<GreenNodeHead, GreenNode>,
-    tokens:   FxHashMap<GreenTokenData, GreenToken>,
+    nodes: FxHashMap<GreenNodeHead, GreenNode>,
+    tokens: FxHashMap<GreenTokenData, GreenToken>,
     interner: MaybeOwned<'i, I>,
 }
 
@@ -54,8 +54,8 @@ impl NodeCache<'static> {
     /// ```
     pub fn new() -> Self {
         Self {
-            nodes:    FxHashMap::default(),
-            tokens:   FxHashMap::default(),
+            nodes: FxHashMap::default(),
+            tokens: FxHashMap::default(),
             interner: MaybeOwned::Owned(new_interner()),
         }
     }
@@ -101,8 +101,8 @@ where
     #[inline]
     pub fn with_interner(interner: &'i mut I) -> Self {
         Self {
-            nodes:    FxHashMap::default(),
-            tokens:   FxHashMap::default(),
+            nodes: FxHashMap::default(),
+            tokens: FxHashMap::default(),
             interner: MaybeOwned::Borrowed(interner),
         }
     }
@@ -138,8 +138,8 @@ where
     #[inline]
     pub fn from_interner(interner: I) -> Self {
         Self {
-            nodes:    FxHashMap::default(),
-            tokens:   FxHashMap::default(),
+            nodes: FxHashMap::default(),
+            tokens: FxHashMap::default(),
             interner: MaybeOwned::Owned(interner),
         }
     }
@@ -270,18 +270,21 @@ pub struct Checkpoint(usize);
 /// ```
 #[derive(Debug)]
 pub struct GreenNodeBuilder<'cache, 'interner, S: Syntax, I = TokenInterner> {
-    cache:    MaybeOwned<'cache, NodeCache<'interner, I>>,
-    parents:  Vec<(S, usize)>,
+    cache: MaybeOwned<'cache, NodeCache<'interner, I>>,
+    parents: Vec<(S, usize)>,
     children: Vec<GreenElement>,
+    /// Caches the current document length to avoid recomputing it.
+    doc_len: TextSize,
 }
 
 impl<S: Syntax> GreenNodeBuilder<'static, 'static, S> {
     /// Creates new builder with an empty [`NodeCache`].
     pub fn new() -> Self {
         Self {
-            cache:    MaybeOwned::Owned(NodeCache::new()),
-            parents:  Vec::with_capacity(8),
+            cache: MaybeOwned::Owned(NodeCache::new()),
+            parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
+            doc_len: TextSize::new(0),
         }
     }
 }
@@ -301,9 +304,10 @@ where
     /// share underlying trees.
     pub fn with_cache(cache: &'cache mut NodeCache<'interner, I>) -> Self {
         Self {
-            cache:    MaybeOwned::Borrowed(cache),
-            parents:  Vec::with_capacity(8),
+            cache: MaybeOwned::Borrowed(cache),
+            parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
+            doc_len: TextSize::new(0),
         }
     }
 
@@ -334,9 +338,10 @@ where
     /// ```
     pub fn from_cache(cache: NodeCache<'interner, I>) -> Self {
         Self {
-            cache:    MaybeOwned::Owned(cache),
-            parents:  Vec::with_capacity(8),
+            cache: MaybeOwned::Owned(cache),
+            parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
+            doc_len: TextSize::new(0),
         }
     }
 
@@ -407,7 +412,9 @@ where
                 self.cache.token::<S>(kind, Some(text), len)
             }
         };
+        let text_len = token.text_len();
         self.children.push(token.into());
+        self.doc_len += text_len;
     }
 
     /// Add a new token to the current node without storing an explicit section of text.
@@ -423,7 +430,9 @@ where
     pub fn static_token(&mut self, kind: S) {
         let static_text = S::static_text(kind).unwrap_or_else(|| panic!("Missing static text for '{kind:?}'"));
         let token = self.cache.token::<S>(kind, None, static_text.len() as u32);
+        let text_len = token.text_len();
         self.children.push(token.into());
+        self.doc_len += text_len;
     }
 
     /// Start new node of the given `kind` and make it current.
@@ -511,5 +520,30 @@ where
             NodeOrToken::Node(node) => (node, cache),
             NodeOrToken::Token(_) => panic!("called `finish` on a `GreenNodeBuilder` which only contained a token"),
         }
+    }
+
+    /// Returns the children of the current node.
+    #[inline]
+    pub fn current_children(&self) -> &[GreenElement] {
+        let first_child = self.parents.last().map_or(0, |&(_, first_child)| first_child);
+        &self.children[first_child..]
+    }
+
+    /// Removes the last child from the current node and returns it.
+    #[inline]
+    pub fn pop_last_child(&mut self) -> GreenElement {
+        assert!(
+            !self.current_children().is_empty(),
+            "no children to pop for current node"
+        );
+        let elem = self.children.pop().unwrap();
+        self.doc_len -= elem.text_len();
+        elem
+    }
+
+    /// Returns the length of text in the root node.
+    #[inline]
+    pub fn document_len(&self) -> TextSize {
+        self.doc_len
     }
 }

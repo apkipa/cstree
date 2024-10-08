@@ -12,9 +12,9 @@ use crate::{
 
 #[derive(Clone, Debug)]
 struct Iter<'n> {
-    green:  GreenNodeChildren<'n>,
+    green: GreenNodeChildren<'n>,
     offset: TextSize,
-    index:  usize,
+    index: usize,
 }
 
 impl<'n> Iter<'n> {
@@ -68,7 +68,7 @@ impl<'n> FusedIterator for Iter<'n> {}
 /// An iterator over the child nodes of a [`SyntaxNode`].
 #[derive(Clone, Debug)]
 pub struct SyntaxNodeChildren<'n, S: Syntax, D: 'static = ()> {
-    inner:  Iter<'n>,
+    inner: Iter<'n>,
     parent: &'n SyntaxNode<S, D>,
 }
 
@@ -120,7 +120,7 @@ impl<'n, S: Syntax, D> FusedIterator for SyntaxNodeChildren<'n, S, D> {}
 /// An iterator over the children of a [`SyntaxNode`].
 #[derive(Clone, Debug)]
 pub struct SyntaxElementChildren<'n, S: Syntax, D: 'static = ()> {
-    inner:  Iter<'n>,
+    inner: Iter<'n>,
     parent: &'n SyntaxNode<S, D>,
 }
 

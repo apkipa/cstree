@@ -257,7 +257,7 @@ where
         D: serde::Serialize,
     {
         crate::serde_impls::SerializeWithData {
-            node:     self,
+            node: self,
             resolver: self.resolver().as_ref(),
         }
     }

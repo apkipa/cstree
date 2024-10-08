@@ -240,7 +240,7 @@ enum Kind<S: Syntax, D: 'static> {
     Root(GreenNode, Option<StdArc<dyn Resolver<TokenKey>>>),
     Child {
         parent: SyntaxNode<S, D>,
-        index:  u32,
+        index: u32,
         offset: TextSize,
     },
 }
@@ -255,11 +255,11 @@ impl<S: Syntax, D> Kind<S, D> {
 }
 
 pub(super) struct NodeData<S: Syntax, D: 'static> {
-    kind:        Kind<S, D>,
-    green:       NonNull<GreenNode>,
-    ref_count:   *mut AtomicU32,
-    data:        RwLock<Option<Arc<D>>>,
-    children:    Vec<UnsafeCell<Option<SyntaxElement<S, D>>>>,
+    kind: Kind<S, D>,
+    green: NonNull<GreenNode>,
+    ref_count: *mut AtomicU32,
+    data: RwLock<Option<Arc<D>>>,
+    children: Vec<UnsafeCell<Option<SyntaxElement<S, D>>>>,
     child_locks: Vec<RwLock<()>>,
 }
 

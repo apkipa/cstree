@@ -42,8 +42,8 @@ use crate::{
 /// ```
 #[derive(Clone)]
 pub struct SyntaxText<'n, 'i, I: ?Sized, S: Syntax, D: 'static = ()> {
-    node:     &'n SyntaxNode<S, D>,
-    range:    TextRange,
+    node: &'n SyntaxNode<S, D>,
+    range: TextRange,
     resolver: &'i I,
 }
 
