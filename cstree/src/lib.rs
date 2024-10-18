@@ -130,6 +130,8 @@ pub mod text {
 /// syntax tree.
 pub mod build {
     pub use crate::green::builder::{Checkpoint, GreenNodeBuilder, NodeCache};
+    #[cfg(feature = "multi_threaded_interning")]
+    pub use crate::green::threaded_builder::{ThreadedGreenNodeBuilder, ThreadedNodeCache};
 }
 
 /// A convenient collection of the most used parts of `cstree`.

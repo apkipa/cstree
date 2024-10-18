@@ -1,17 +1,17 @@
+use dashmap::DashMap;
+use fxhash::{FxBuildHasher, FxHasher32};
 use std::hash::{Hash, Hasher};
-
-use fxhash::{FxHashMap, FxHasher32};
 use text_size::TextSize;
 
+use super::{node::GreenNodeHead, token::GreenTokenData};
+use crate::interning::{new_threaded_interner, MultiThreadedTokenInterner};
+use crate::utility_types::MaybeOwnedRef;
 use crate::{
     green::{GreenElement, GreenNode, GreenToken},
-    interning::{new_interner, Interner, TokenInterner, TokenKey},
+    interning::{Interner, TokenKey},
     util::NodeOrToken,
-    utility_types::MaybeOwned,
     RawSyntaxKind, Syntax,
 };
-
-use super::{node::GreenNodeHead, token::GreenTokenData};
 
 /// If `node.children() <= CHILDREN_CACHE_THRESHOLD`, we will not create
 /// a new [`GreenNode`], but instead lookup in the cache if this node is
@@ -20,19 +20,19 @@ use super::{node::GreenNodeHead, token::GreenTokenData};
 const CHILDREN_CACHE_THRESHOLD: usize = 3;
 
 /// A `NodeCache` deduplicates identical tokens and small nodes during tree construction.
-/// You can re-use the same cache for multiple similar trees with [`GreenNodeBuilder::with_cache`].
+/// You can re-use the same cache for multiple similar trees with [`ThreadedGreenNodeBuilder::with_cache`].
 #[derive(Debug)]
-pub struct NodeCache<'i, I = TokenInterner> {
-    nodes: FxHashMap<GreenNodeHead, GreenNode>,
-    tokens: FxHashMap<GreenTokenData, GreenToken>,
-    interner: MaybeOwned<'i, I>,
+pub struct ThreadedNodeCache<'i, I = MultiThreadedTokenInterner> {
+    nodes: DashMap<GreenNodeHead, GreenNode, FxBuildHasher>,
+    tokens: DashMap<GreenTokenData, GreenToken, FxBuildHasher>,
+    interner: MaybeOwnedRef<'i, I>,
 }
 
-impl NodeCache<'static> {
+impl ThreadedNodeCache<'static> {
     /// Constructs a new, empty cache.
     ///
     /// By default, this will also create a default interner to deduplicate source text (strings) across
-    /// tokens. To re-use an existing interner, see [`with_interner`](NodeCache::with_interner).
+    /// tokens. To re-use an existing interner, see [`with_interner`](ThreadedNodeCache::with_interner).
     /// # Examples
     /// ```
     /// # use cstree::testing::*;
@@ -54,22 +54,22 @@ impl NodeCache<'static> {
     /// ```
     pub fn new() -> Self {
         Self {
-            nodes: FxHashMap::default(),
-            tokens: FxHashMap::default(),
-            interner: MaybeOwned::Owned(new_interner()),
+            nodes: DashMap::default(),
+            tokens: DashMap::default(),
+            interner: MaybeOwnedRef::Owned(new_threaded_interner()),
         }
     }
 }
 
-impl Default for NodeCache<'static> {
+impl Default for ThreadedNodeCache<'static> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'i, I> NodeCache<'i, I>
+impl<'i, I> ThreadedNodeCache<'i, I>
 where
-    I: Interner<TokenKey>,
+    for<'a> &'a I: Interner<TokenKey>,
 {
     /// Constructs a new, empty cache that will use the given interner to deduplicate source text
     /// (strings) across tokens.
@@ -99,11 +99,11 @@ where
     /// assert_eq!(int.as_token().unwrap().text(&interner), Some("42"));
     /// ```
     #[inline]
-    pub fn with_interner(interner: &'i mut I) -> Self {
+    pub fn with_interner(interner: &'i I) -> Self {
         Self {
-            nodes: FxHashMap::default(),
-            tokens: FxHashMap::default(),
-            interner: MaybeOwned::Borrowed(interner),
+            nodes: DashMap::default(),
+            tokens: DashMap::default(),
+            interner: MaybeOwnedRef::Borrowed(interner),
         }
     }
 
@@ -138,15 +138,15 @@ where
     #[inline]
     pub fn from_interner(interner: I) -> Self {
         Self {
-            nodes: FxHashMap::default(),
-            tokens: FxHashMap::default(),
-            interner: MaybeOwned::Owned(interner),
+            nodes: DashMap::default(),
+            tokens: DashMap::default(),
+            interner: MaybeOwnedRef::Owned(interner),
         }
     }
 
     /// Get a reference to the interner used to deduplicate source text (strings).
     ///
-    /// See also [`interner_mut`](NodeCache::interner_mut).
+    /// See also [`interner_mut`](ThreadedNodeCache::interner_mut).
     #[inline]
     pub fn interner(&self) -> &I {
         &self.interner
@@ -164,12 +164,15 @@ where
     /// assert_eq!(interner.resolve(key), "foo");
     /// ```
     #[inline]
-    pub fn interner_mut(&mut self) -> &mut I {
-        &mut self.interner
+    pub fn interner_mut(&mut self) -> Option<&mut I> {
+        match &mut self.interner {
+            MaybeOwnedRef::Owned(interner) => Some(interner),
+            MaybeOwnedRef::Borrowed(_) => None,
+        }
     }
 
-    /// If this node cache was constructed with [`new`](NodeCache::new) or
-    /// [`from_interner`](NodeCache::from_interner), returns the interner used to deduplicate source
+    /// If this node cache was constructed with [`new`](ThreadedNodeCache::new) or
+    /// [`from_interner`](ThreadedNodeCache::from_interner), returns the interner used to deduplicate source
     /// text (strings) to allow resolving tree tokens back to text and re-using the interner to build
     /// additonal trees.
     #[inline]
@@ -177,7 +180,7 @@ where
         self.interner.into_owned()
     }
 
-    fn node<S: Syntax>(&mut self, kind: S, all_children: &mut Vec<GreenElement>, offset: usize) -> GreenNode {
+    fn node<S: Syntax>(&self, kind: S, all_children: &mut Vec<GreenElement>, offset: usize) -> GreenNode {
         // NOTE: this fn must remove all children starting at `first_child` from `all_children` before returning
         let kind = S::into_raw(kind);
         let mut hasher = FxHasher32::default();
@@ -204,15 +207,15 @@ where
     }
 
     #[inline(always)]
-    fn intern(&mut self, text: &str) -> TokenKey {
-        self.interner.get_or_intern(text)
+    fn intern(&self, text: &str) -> TokenKey {
+        (&*self.interner).get_or_intern(text)
     }
 
     /// Creates a [`GreenNode`] by looking inside the cache or inserting
     /// a new node into the cache if it's a cache miss.
     #[inline]
     fn get_cached_node(
-        &mut self,
+        &self,
         kind: RawSyntaxKind,
         children: std::vec::Drain<'_, GreenElement>,
         text_len: TextSize,
@@ -224,32 +227,30 @@ where
             child_hash,
         };
         self.nodes
-            .entry(head)
-            .or_insert_with_key(|head| GreenNode::from_head_and_children(head.clone(), children))
+            .entry(head.clone())
+            .or_insert_with(|| GreenNode::from_head_and_children(head, children))
             .clone()
     }
 
-    fn token<S: Syntax>(&mut self, kind: S, text: Option<TokenKey>, len: u32) -> GreenToken {
+    fn token<S: Syntax>(&self, kind: S, text: Option<TokenKey>, len: u32) -> GreenToken {
         let text_len = TextSize::from(len);
         let kind = S::into_raw(kind);
         let data = GreenTokenData { kind, text, text_len };
         self.tokens
-            .entry(data)
-            .or_insert_with_key(|data| GreenToken::new(*data))
+            .entry(data.clone())
+            .or_insert_with(|| GreenToken::new(data))
             .clone()
     }
 }
 
-/// A checkpoint for maybe wrapping a node. See [`GreenNodeBuilder::checkpoint`] for details.
-#[derive(Clone, Copy, Debug)]
-pub struct Checkpoint(pub(crate) usize);
+pub use super::builder::Checkpoint;
 
 /// A builder for green trees.
-/// Construct with [`new`](GreenNodeBuilder::new), [`with_cache`](GreenNodeBuilder::with_cache), or
-/// [`from_cache`](GreenNodeBuilder::from_cache). To add tree nodes, start them with
-/// [`start_node`](GreenNodeBuilder::start_node), add [`token`](GreenNodeBuilder::token)s and then
-/// [`finish_node`](GreenNodeBuilder::finish_node). When the whole tree is constructed, call
-/// [`finish`](GreenNodeBuilder::finish) to obtain the root.
+/// Construct with [`new`](ThreadedGreenNodeBuilder::new), [`with_cache`](ThreadedGreenNodeBuilder::with_cache), or
+/// [`from_cache`](ThreadedGreenNodeBuilder::from_cache). To add tree nodes, start them with
+/// [`start_node`](ThreadedGreenNodeBuilder::start_node), add [`token`](ThreadedGreenNodeBuilder::token)s and then
+/// [`finish_node`](ThreadedGreenNodeBuilder::finish_node). When the whole tree is constructed, call
+/// [`finish`](ThreadedGreenNodeBuilder::finish) to obtain the root.
 ///
 /// # Examples
 /// ```
@@ -269,19 +270,19 @@ pub struct Checkpoint(pub(crate) usize);
 /// assert_eq!(int.as_token().unwrap().text(&resolver), Some("42"));
 /// ```
 #[derive(Debug)]
-pub struct GreenNodeBuilder<'cache, 'interner, S: Syntax, I = TokenInterner> {
-    cache: MaybeOwned<'cache, NodeCache<'interner, I>>,
+pub struct ThreadedGreenNodeBuilder<'cache, 'interner, S: Syntax, I = MultiThreadedTokenInterner> {
+    cache: MaybeOwnedRef<'cache, ThreadedNodeCache<'interner, I>>,
     parents: Vec<(S, usize)>,
     children: Vec<GreenElement>,
     /// Caches the current document length to avoid recomputing it.
     doc_len: TextSize,
 }
 
-impl<S: Syntax> GreenNodeBuilder<'static, 'static, S> {
-    /// Creates new builder with an empty [`NodeCache`].
+impl<S: Syntax> ThreadedGreenNodeBuilder<'static, 'static, S> {
+    /// Creates new builder with an empty [`ThreadedNodeCache`].
     pub fn new() -> Self {
         Self {
-            cache: MaybeOwned::Owned(NodeCache::new()),
+            cache: MaybeOwnedRef::Owned(ThreadedNodeCache::new()),
             parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
             doc_len: TextSize::new(0),
@@ -289,31 +290,31 @@ impl<S: Syntax> GreenNodeBuilder<'static, 'static, S> {
     }
 }
 
-impl<S: Syntax> Default for GreenNodeBuilder<'static, 'static, S> {
+impl<S: Syntax> Default for ThreadedGreenNodeBuilder<'static, 'static, S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'cache, 'interner, S, I> GreenNodeBuilder<'cache, 'interner, S, I>
+impl<'cache, 'interner, S, I> ThreadedGreenNodeBuilder<'cache, 'interner, S, I>
 where
     S: Syntax,
-    I: Interner<TokenKey>,
+    for<'a> &'a I: Interner<TokenKey>,
 {
-    /// Reusing a [`NodeCache`] between multiple builders saves memory, as it allows to structurally
+    /// Reusing a [`ThreadedNodeCache`] between multiple builders saves memory, as it allows to structurally
     /// share underlying trees.
-    pub fn with_cache(cache: &'cache mut NodeCache<'interner, I>) -> Self {
+    pub fn with_cache(cache: &'cache ThreadedNodeCache<'interner, I>) -> Self {
         Self {
-            cache: MaybeOwned::Borrowed(cache),
+            cache: MaybeOwnedRef::Borrowed(cache),
             parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
             doc_len: TextSize::new(0),
         }
     }
 
-    /// Reusing a [`NodeCache`] between multiple builders saves memory, as it allows to structurally
+    /// Reusing a [`ThreadedNodeCache`] between multiple builders saves memory, as it allows to structurally
     /// share underlying trees.
-    /// The `cache` given will be returned on [`finish`](GreenNodeBuilder::finish).
+    /// The `cache` given will be returned on [`finish`](ThreadedGreenNodeBuilder::finish).
     /// # Examples
     /// ```
     /// # use cstree::testing::*;
@@ -336,9 +337,9 @@ where
     /// assert_eq!(int.kind(), MySyntax::into_raw(Int));
     /// assert_eq!(int.as_token().unwrap().text(&interner), Some("42"));
     /// ```
-    pub fn from_cache(cache: NodeCache<'interner, I>) -> Self {
+    pub fn from_cache(cache: ThreadedNodeCache<'interner, I>) -> Self {
         Self {
-            cache: MaybeOwned::Owned(cache),
+            cache: MaybeOwnedRef::Owned(cache),
             parents: Vec::with_capacity(8),
             children: Vec::with_capacity(8),
             doc_len: TextSize::new(0),
@@ -347,28 +348,28 @@ where
 
     /// Shortcut to construct a builder that uses an existing interner.
     ///
-    /// This is equivalent to using [`from_cache`](GreenNodeBuilder::from_cache) with a node cache
-    /// obtained from [`NodeCache::with_interner`].
+    /// This is equivalent to using [`from_cache`](ThreadedGreenNodeBuilder::from_cache) with a node cache
+    /// obtained from [`ThreadedNodeCache::with_interner`].
     #[inline]
     pub fn with_interner(interner: &'interner mut I) -> Self {
-        let cache = NodeCache::with_interner(interner);
+        let cache = ThreadedNodeCache::with_interner(interner);
         Self::from_cache(cache)
     }
 
     /// Shortcut to construct a builder that uses an existing interner.
     ///
-    /// This is equivalent to using [`from_cache`](GreenNodeBuilder::from_cache) with a node cache
-    /// obtained from [`NodeCache::from_interner`].
+    /// This is equivalent to using [`from_cache`](ThreadedGreenNodeBuilder::from_cache) with a node cache
+    /// obtained from [`ThreadedNodeCache::from_interner`].
     #[inline]
     pub fn from_interner(interner: I) -> Self {
-        let cache = NodeCache::from_interner(interner);
+        let cache = ThreadedNodeCache::from_interner(interner);
         Self::from_cache(cache)
     }
 
     /// Get a reference to the interner used to deduplicate source text (strings).
     ///
-    /// This is the same interner as used by the underlying [`NodeCache`].
-    /// See also [`interner_mut`](GreenNodeBuilder::interner_mut).
+    /// This is the same interner as used by the underlying [`ThreadedNodeCache`].
+    /// See also [`interner_mut`](ThreadedGreenNodeBuilder::interner_mut).
     #[inline]
     pub fn interner(&self) -> &I {
         &self.cache.interner
@@ -376,7 +377,7 @@ where
 
     /// Get a mutable reference to the interner used to deduplicate source text (strings).
     ///
-    /// This is the same interner as used by the underlying [`NodeCache`].
+    /// This is the same interner as used by the underlying [`ThreadedNodeCache`].
     /// # Examples
     /// ```
     /// # use cstree::testing::*;
@@ -388,8 +389,11 @@ where
     /// assert_eq!(interner.resolve(key), "foo");
     /// ```
     #[inline]
-    pub fn interner_mut(&mut self) -> &mut I {
-        &mut self.cache.interner
+    pub fn interner_mut(&mut self) -> Option<&mut I> {
+        match &mut self.cache {
+            MaybeOwnedRef::Owned(cache) => cache.interner_mut(),
+            MaybeOwnedRef::Borrowed(_) => None,
+        }
     }
 
     /// Add a new token with the given `text` to the current node.
@@ -418,11 +422,11 @@ where
     }
 
     /// Add a new token to the current node without storing an explicit section of text.
-    /// This is be useful if the text can always be inferred from the token's `kind`, for example
+    /// This is useful if the text can always be inferred from the token's `kind`, for example
     /// when using kinds for specific operators or punctuation.
     ///
     /// For tokens whose textual representation is not static, such as numbers or identifiers, use
-    /// [`token`](GreenNodeBuilder::token).
+    /// [`token`](ThreadedGreenNodeBuilder::token).
     ///
     /// ## Panics
     /// If `kind` does not have static text, i.e., `L::static_text(kind)` returns `None`.
@@ -454,7 +458,7 @@ where
     /// Prepare for maybe wrapping the next node with a surrounding node.
     ///
     /// The way wrapping works is that you first get a checkpoint, then you add nodes and tokens as
-    /// normal, and then you *maybe* call [`start_node_at`](GreenNodeBuilder::start_node_at).
+    /// normal, and then you *maybe* call [`start_node_at`](ThreadedGreenNodeBuilder::start_node_at).
     ///
     /// # Examples
     /// ```
@@ -481,7 +485,7 @@ where
         Checkpoint(self.children.len())
     }
 
-    /// Wrap the previous branch marked by [`checkpoint`](GreenNodeBuilder::checkpoint) in a new
+    /// Wrap the previous branch marked by [`checkpoint`](ThreadedGreenNodeBuilder::checkpoint) in a new
     /// branch and make it current.
     #[inline]
     pub fn start_node_at(&mut self, checkpoint: Checkpoint, kind: S) {
@@ -503,17 +507,17 @@ where
 
     /// Complete building the tree.
     ///
-    /// Make sure that calls to [`start_node`](GreenNodeBuilder::start_node) /
-    /// [`start_node_at`](GreenNodeBuilder::start_node_at) and
-    /// [`finish_node`](GreenNodeBuilder::finish_node) are balanced, i.e. that every started node has
+    /// Make sure that calls to [`start_node`](ThreadedGreenNodeBuilder::start_node) /
+    /// [`start_node_at`](ThreadedGreenNodeBuilder::start_node_at) and
+    /// [`finish_node`](ThreadedGreenNodeBuilder::finish_node) are balanced, i.e. that every started node has
     /// been completed!
     ///
-    /// If this builder was constructed with [`new`](GreenNodeBuilder::new) or
-    /// [`from_cache`](GreenNodeBuilder::from_cache), this method returns the cache used to deduplicate tree nodes
+    /// If this builder was constructed with [`new`](ThreadedGreenNodeBuilder::new) or
+    /// [`from_cache`](ThreadedGreenNodeBuilder::from_cache), this method returns the cache used to deduplicate tree nodes
     ///  as its second return value to allow re-using the cache or extracting the underlying string
-    ///  [`Interner`]. See also [`NodeCache::into_interner`].
+    ///  [`Interner`]. See also [`ThreadedNodeCache::into_interner`].
     #[inline]
-    pub fn finish(mut self) -> (GreenNode, Option<NodeCache<'interner, I>>) {
+    pub fn finish(mut self) -> (GreenNode, Option<ThreadedNodeCache<'interner, I>>) {
         assert_eq!(self.children.len(), 1);
         let cache = self.cache.into_owned();
         match self.children.pop().unwrap() {

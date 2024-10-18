@@ -6,6 +6,8 @@ pub(super) mod builder;
 mod element;
 mod iter;
 mod node;
+#[cfg(feature = "multi_threaded_interning")]
+pub(super) mod threaded_builder;
 mod token;
 
 pub(crate) use self::element::GreenElementRef;

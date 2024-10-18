@@ -129,6 +129,38 @@ impl<T: Default> Default for MaybeOwned<'_, T> {
     }
 }
 
+#[derive(Debug)]
+pub enum MaybeOwnedRef<'a, T> {
+    Owned(T),
+    Borrowed(&'a T),
+}
+
+impl<T> MaybeOwnedRef<'_, T> {
+    pub fn into_owned(self) -> Option<T> {
+        match self {
+            MaybeOwnedRef::Owned(owned) => Some(owned),
+            MaybeOwnedRef::Borrowed(_) => None,
+        }
+    }
+}
+
+impl<T> std::ops::Deref for MaybeOwnedRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            MaybeOwnedRef::Owned(it) => it,
+            MaybeOwnedRef::Borrowed(it) => it,
+        }
+    }
+}
+
+impl<T: Default> Default for MaybeOwnedRef<'_, T> {
+    fn default() -> Self {
+        MaybeOwnedRef::Owned(T::default())
+    }
+}
+
 /// There might be zero, one or two leaves at a given offset.
 #[derive(Clone, Debug)]
 pub enum TokenAtOffset<T> {
